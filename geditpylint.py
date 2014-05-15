@@ -1,5 +1,7 @@
 """
-This module contains the plugin for GeditPylint.
+This module contains the plugin for GeditPylint. The plugin is designed to run
+whenever a python document is saved. Warnings, errors, etc. issued by Pylint
+are highlighted in the coding window. Non-python documents are unaffected.
 
 References:
     Python Gtk Tutorial: http://python-gtk-3-tutorial.readthedocs.org/en/latest/
@@ -9,12 +11,13 @@ References:
     GtkSourceView: https://developer.gnome.org/gtksourceview/stable/
     Basic tutorial: http://www.micahcarrick.com/writing-plugins-for-gedit-3-in-python.html
 """
-
+#All of these "errors" occur because pylint does not play well with GObject
+#pylint: disable=E0611, W0613, E1101
 from gi.repository import GObject, Gedit, Gdk
 
 #Change this value to True to enable debug messages to be printed to the
 #the console. Likewise, set it to False to turn of debug messages
-ENABLE_DEBUG = False
+ENABLE_DEBUG = True
 
 
 class GeditPylint(GObject.Object, Gedit.WindowActivatable):
@@ -38,11 +41,12 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         self.known_documents = list()
 
         #This will hold the messages retrieved by pylint.
-        #They will be index by tag object. This allows for easy
-        #access and lookup in the cursor-moved signal hanlder
+        #They will be indexed by tag object. This allows for easy
+        #access and lookup in the cursor-moved signal hanlder.
         self.lint_messages = dict()
 
-        #These are the colors used for the different pylint message types
+        #These are the default colors used for the different pylint message
+        #types
         self.lint_color = dict()
         self.lint_color['F'] = Gdk.RGBA(1.0, 0.0, 0.0, 0.25)
         self.lint_color['E'] = Gdk.RGBA(1.0, 0.5, 0.5, 0.25)
@@ -50,7 +54,7 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         self.lint_color['R'] = Gdk.RGBA(0.5, 1.0, 0.5, 0.25)
         self.lint_color['C'] = Gdk.RGBA(0.5, 0.5, 1.0, 0.25)
 
-        #This is a catch all for any code other than the one listed.
+        #This is a catch all for any code *other* than the one listed.
         #It is mostly used to signal an error condition inside the
         #plugin. No one should ever see this color.
         self.lint_color['O'] = Gdk.RGBA(0, 0, 0, 0.5)
@@ -61,20 +65,13 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         #a simple test to see if the we have selected a whole word or not.
         self.word_end_exceptions = ['-', '_']
 
+        #A local pointer to Gedit's status bar
+        self.status_bar = None
+
+        #The context for our status messages
+        self.context_id = None
+
         debug('Init!!')
-
-    def attach_signal(self, object, signal, handler):
-        """This is a helper function that allows us to attach signal handlers
-        to a given object's signal. Basically it is to encapsulate the
-        process so I do not have to copy-paste the logic.
-        """
-        debug('Connecting signal ', signal)
-        hid = object.connect(signal, handler)
-
-        #We only need to clean up and keep track of window based handlers.
-        #Otherwise the object will deal with them itself.
-        if self.window == object:
-            self.handlers.append(hid)
 
     def do_activate(self):
         """This is called by Gedit when a view is activated. Generally, this
@@ -87,9 +84,11 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         """
         debug("View {} activated.".format(str(self.window)))
 
+        #Get a handle to the status bar and create context id for this plugin
         self.status_bar = self.window.get_statusbar()
         self.context_id = self.status_bar.get_context_id('pylint')
 
+        #Be sure each tab is examined when it is added looking for python files.
         self.attach_signal(self.window, 'tab-added', self.tab_added)
 
     def do_deactivate(self):
@@ -136,7 +135,7 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         debug("Adding tab: ", tab)
 
         #This occurs if the window is shut with a blank tab open
-        if not tab:
+        if not tab or tab.get_state() != Gedit.TabState.STATE_NORMAL:
             debug('\tTab does not exist, skipping')
             return False
 
@@ -153,6 +152,9 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
             debug('Not a python file: ', doc.get_mime_type())
             return False
 
+        #At this point we know the tab contains a python file.
+        #We need to set handling running pylint when the document is saved,
+        #and showing the lint messages in the status bar.
         debug("Tab contains a Python file")
         self.attach_signal(doc, "saved", self.run_pylint)
         self.attach_signal(doc, 'cursor-moved', self.show_lint_message)
@@ -161,12 +163,25 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         #Give the python file an initial lint
         self.run_pylint(doc, None)
 
+    def attach_signal(self, obj, signal, handler):
+        """This is a helper function that allows us to attach signal handlers
+        to a given object's signal. Basically it is to encapsulate the
+        process so I do not have to copy-paste the logic.
+        """
+        debug('Connecting signal ', signal)
+        hid = obj.connect(signal, handler)
+
+        #We only need to clean up and keep track of window based handlers.
+        #Otherwise the object will deal with them itself.
+        if self.window == object:
+            self.handlers.append(hid)
+
     def run_pylint(self, document, error, data=None):
         """This method runs pylint. In general this method is called as a
         signal handler for the document "saved" signal.
 
-        Pylint is run in a subprocess. Its ouput is then parsed. The document
-        is then altered to highlight the type of messages received from
+        Pylint is run in a subprocess. Its ouput is then parsed. Finally, the
+        document is highlighted based on the type of messages received from
         pylint.
         """
         import os.path
@@ -185,7 +200,7 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
 
         #Pylint looks for settings files in several places,
         #one of those places is along the path of the input file.
-        #Hence, set the process' working directory to the file's directory.
+        #Hence, we set the process' working directory to the file's directory.
         working_directory = os.path.dirname(filename)
 
         #Run pylint
@@ -199,6 +214,8 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
                                     stderr=subprocess.STDOUT)
             output, _ = proc.communicate()
 
+            #Pylint's exit codes do not follow the common convention.
+            #Any exit code less than 32 is not an error.
             if proc.returncode >= 32:
                 debug('Pylint failed to run properly')
                 debug('Output from pylint:')
@@ -215,40 +232,8 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         #Take pylints messages and parse them into tags and useful dicts.
         self.lint_parse(document, output.decode())
 
-        for tag, status in self.lint_messages.items():
-            #The document uses zero based counts
-            line = int(status['line'])-1
-            column = int(status['column'])
-
-            #The tag will be applied at the given line and column from pylint
-            start_iter = document.get_iter_at_line_offset(line, column)
-
-            #We need to calculate where to end the tag. Start from the
-            #start postition.
-            #NOTE: The documentation says that we do not need to call the
-            #copy() method. I tried that, it did not work. This may be fixed
-            #in in an updated version of GTK's python bindings.
-            end_iter = start_iter.copy()
-
-            #If the message is located at column zero, take that to mean
-            #that the message applies to the entire line.
-            if column == 0:
-                end_iter.forward_to_line_end()
-            else:
-                #Keep looking for the actual end of a word. The loop handles
-                #variable names like_this_one or strings-like-this.
-                while not end_iter.ends_line():
-                    end_iter.forward_word_end()
-                    if end_iter.get_char() not in self.word_end_exceptions:
-                        break
-
-            #Skip opening whitespace
-            self.forward_to_char(start_iter, end_iter)
-
-            #Tag the text in the document
-            document.apply_tag(tag, start_iter, end_iter)
-
-        return False
+        #Apply the lint messages to the document
+        self.apply_lint(document)
 
     def lint_parse(self, document, messages):
         """This function parses the output of pylint into a programatically
@@ -280,8 +265,8 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
                 continue
 
             #Skip blank lines and lines begining with white space
-            if (message is None or message is '' or
-               message[0] in string.whitespace):
+            if message is None or message is '' or \
+               message[0] in string.whitespace:
                 continue
 
             (line, column, status_txt) = message.split(':')
@@ -306,23 +291,45 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
             self.lint_messages[tag] = {'line': line, 'column': column,
                                        'message': status_txt}
 
-    def forward_to_char(self, start_iter, limit_iter):
-        """Since python file's lines are usually indented, we need to move
-        the start position to the first non-whitespace character. We limit
-        how far the iterator can go using the second parameter (usually set
-        to the end of the line).
-
-        Note: This function essentially replicates the functionality of the
-        Gtk.TextIter.forward_find_char() method. I actually tried to use this
-        but I got un-google-able errors about converting gunichar. This
-        might be fixed in the future, in which case this function can
-        be replaced with a lambda.
+    def apply_lint(self, document):
+        """This method applies the tags to the document that were previously
+        calculated. Essentially, each of the tags created in the lint_parse()
+        method, will be drawn onto to document.
         """
-        import string
+        for tag, status in self.lint_messages.items():
+            #The document uses zero based line count
+            line = int(status['line'])-1
+            column = int(status['column'])
 
-        while (start_iter.get_char() in string.whitespace and
-               start_iter.get_offset() < limit_iter.get_offset()):
-            start_iter.forward_char()
+            #The tag will be applied at the given line and column from pylint
+            start_iter = document.get_iter_at_line_offset(line, column)
+
+            #We need to calculate where to end the tag. Start from the
+            #start postition.
+            #NOTE: The documentation says that we do not need to call the
+            #copy() method. I tried that, it did not work. This may be fixed
+            #in in an updated version of GTK's python bindings.
+            end_iter = start_iter.copy()
+
+            #If the message is located at column zero, take that to mean
+            #that the message applies to the entire line.
+            if column == 0:
+                end_iter.forward_to_line_end()
+            else:
+                #Keep looking for the actual end of a word. The loop handles
+                #variable names like_this_one or strings-like-this.
+                while not end_iter.ends_line():
+                    end_iter.forward_word_end()
+                    if end_iter.get_char() not in self.word_end_exceptions:
+                        break
+
+            #Skip opening whitespace
+            forward_to_char(start_iter, end_iter)
+
+            #Tag the text in the document
+            document.apply_tag(tag, start_iter, end_iter)
+
+        return False
 
     def show_lint_message(self, doc, user_data=None):
         """This signal handler is called whenever the text cursor is moved.
@@ -337,10 +344,37 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
             #Look for tags that have 'pylint' in their name
             name = tag.get_property('name')
             if name is not None and 'pylint' in name:
-                #Show the message in the status bar
-                self.status_bar.push(self.context_id,
-                                     self.lint_messages[tag]['message'])
+                #Get the text this tag was created to represent
+                msg = self.lint_messages[tag]['message']
 
+                #Show the message in the status bar
+                self.status_bar.push(self.context_id, msg)
+                return False
+
+        #If we get here then the cursor is not in a pylint tag. We need to
+        #now clear the status bar of our message.
+        self.status_bar.remove_all(self.context_id)
+        debug('Removed messages')
+
+        return False
+
+def forward_to_char(start_iter, limit_iter):
+    """Since python file's lines are usually indented, we need to move
+    the start position to the first non-whitespace character. We limit
+    how far the iterator can go using the second parameter (usually set
+    to the end of the line).
+
+    Note: This function essentially replicates the functionality of the
+    Gtk.TextIter.forward_find_char() method. I actually tried to use this
+    but I got un-google-able errors about converting gunichar. This
+    might be fixed in the future, in which case this function can
+    be replaced with a lambda.
+    """
+    import string
+
+    while (start_iter.get_char() in string.whitespace and
+           start_iter.get_offset() < limit_iter.get_offset()):
+        start_iter.forward_char()
 
 def debug(*msg):
     """This function prints out debug messages when ENABLE_DEBUG is True.
