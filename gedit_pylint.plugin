@@ -1,0 +1,10 @@
+[Plugin]
+Loader=python3
+Module=gedit_pylint
+IAge=3
+Name=Pylint
+Description=Pylint inside of Gedit
+Authors=Michael Nooner
+Copyright=Copyright © 2014 Michael Nooner
+Website=http://www.example.com
+Version=0.1.0
