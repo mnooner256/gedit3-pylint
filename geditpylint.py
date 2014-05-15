@@ -14,7 +14,7 @@ from gi.repository import GObject, Gedit, Gdk
 
 #Change this value to True to enable debug messages to be printed to the
 #the console. Likewise, set it to False to turn of debug messages
-ENABLE_DEBUG = True
+ENABLE_DEBUG = False
 
 
 class GeditPylint(GObject.Object, Gedit.WindowActivatable):
@@ -171,6 +171,8 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         """
         import os.path
         import subprocess
+        import sys
+
         debug('Running lint!')
 
         #Get the documents file name
@@ -188,20 +190,23 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
 
         #Run pylint
         try:
-            output = subprocess.check_output(['pylint', '-r', 'n',
-                                              '--msg-template={line}:{column}:'
-                                              '[{msg_id} {symbol}] {msg}',
-                                              filename],
-                                             cwd=working_directory)
-        except subprocess.CalledProcessError as cp:
-            #Pylint's exit status does not follow conventions, unless
-            #it is >= 32. See "Output status code" in: pylint --long-help
-            output = cp.output
-            if cp.returncode >= 32:
+            proc = subprocess.Popen(['pylint', '-r', 'n',
+                                     '--msg-template={line}:{column}:'
+                                     '[{msg_id} {symbol}] {msg}',
+                                     filename],
+                                    cwd=working_directory,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT)
+            output, _ = proc.communicate()
+
+            if proc.returncode >= 32:
                 debug('Pylint failed to run properly')
                 debug('Output from pylint:')
-                debug(str(cp.output.decode()))
+                debug(str(output.decode()))
                 return False
+        except FileNotFoundError:
+            print('Pylint is not installed or not found on the path',
+                  file=sys.stderr)
 
         #Empty the document of pylint tags
         for tag in self.lint_messages.keys():
@@ -342,4 +347,6 @@ def debug(*msg):
     It is useful for tracking down errors caused by the plugin.
     """
     import sys
-    print('PYLINT: ', *msg, file=sys.stderr)
+
+    if ENABLE_DEBUG:
+        print('PYLINT: ', *msg, file=sys.stderr)
