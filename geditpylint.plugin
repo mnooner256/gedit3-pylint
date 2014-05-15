@@ -1,0 +1,10 @@
+[Plugin]
+Loader=python3
+Module=geditpylint
+IAge=3
+Name=Pylint for Gedit
+Description=Run Pylint every time you save a python file.
+Authors=Michael Nooner <mnooner256@gmail.com>
+Copyright=Copyright © 2014 Michael Nooner
+Website=https://github.com/mnooner256/gedit3-pylint
+Version=0.1.0
