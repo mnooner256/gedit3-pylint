@@ -21,7 +21,7 @@ ENABLE_DEBUG = True
 
 
 class GeditPylint(GObject.Object, Gedit.WindowActivatable):
-    """This object represents the "plugin" itself. Basically gedit will
+    """This object represents the "plugin" itself. Basically, Gedit will
     automatically ceate an instance for us.
     """
     __gtype_name__ = "GeditPylint"
@@ -38,40 +38,7 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         #Gedit often emits several identical adding, loading,
         #and saving signals. This keeps us from connecting
         #signals to documents we have already examined.
-        self.known_documents = list()
-
-        #This will hold the messages retrieved by pylint.
-        #They will be indexed by tag object. This allows for easy
-        #access and lookup in the cursor-moved signal hanlder.
-        self.lint_messages = dict()
-
-        #These are the default colors used for the different pylint message
-        #types
-        self.lint_color = dict()
-        self.lint_color['F'] = Gdk.RGBA(1.0, 0.0, 0.0, 0.25)
-        self.lint_color['E'] = Gdk.RGBA(1.0, 0.5, 0.5, 0.25)
-        self.lint_color['W'] = Gdk.RGBA(1.0, 1.0, 0.5, 0.25)
-        self.lint_color['R'] = Gdk.RGBA(0.5, 1.0, 0.5, 0.25)
-        self.lint_color['C'] = Gdk.RGBA(0.5, 0.5, 1.0, 0.25)
-
-        #This is a catch all for any code *other* than the one listed.
-        #It is mostly used to signal an error condition inside the
-        #plugin. No one should ever see this color.
-        self.lint_color['O'] = Gdk.RGBA(0, 0, 0, 0.5)
-
-        #Pango does not seem to understand that "words" in code don't
-        #necessarily end with a period or whitespace. Instead they can
-        #contain underscore's or hyphens, etc. This list is used to perform
-        #a simple test to see if the we have selected a whole word or not.
-        self.word_end_exceptions = ['-', '_']
-
-        #A local pointer to Gedit's status bar
-        self.status_bar = None
-
-        #The context for our status messages
-        self.context_id = None
-
-        debug('Init!!')
+        self.known_documents = dict()
 
     def do_activate(self):
         """This is called by Gedit when a view is activated. Generally, this
@@ -84,11 +51,8 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         """
         debug("View {} activated.".format(str(self.window)))
 
-        #Get a handle to the status bar and create context id for this plugin
-        self.status_bar = self.window.get_statusbar()
-        self.context_id = self.status_bar.get_context_id('pylint')
-
-        #Be sure each tab is examined when it is added looking for python files.
+        #Be sure each tab is examined when it is added,
+        #looking for python files.
         self.attach_signal(self.window, 'tab-added', self.tab_added)
 
     def do_deactivate(self):
@@ -132,8 +96,6 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         change the document's mime-type, so it is important be able to
         reexamine documents.
         """
-        debug("Adding tab: ", tab)
-
         #This occurs if the window is shut with a blank tab open
         if not tab or tab.get_state() != Gedit.TabState.STATE_NORMAL:
             debug('\tTab does not exist, skipping')
@@ -152,16 +114,15 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
             debug('Not a python file: ', doc.get_mime_type())
             return False
 
-        #At this point we know the tab contains a python file.
-        #We need to set handling running pylint when the document is saved,
-        #and showing the lint messages in the status bar.
-        debug("Tab contains a Python file")
-        self.attach_signal(doc, "saved", self.run_pylint)
-        self.attach_signal(doc, 'cursor-moved', self.show_lint_message)
-        self.known_documents.append(doc)
+        debug("Adding Python Tab: ", tab)
+
+        mdoc = ManagedDocument(window, doc)
+
+        #Memorize the mdoc so it does not become garbage collected
+        self.known_documents[doc] = mdoc
 
         #Give the python file an initial lint
-        self.run_pylint(doc, None)
+        mdoc.run_pylint(doc, None)
 
     def attach_signal(self, obj, signal, handler):
         """This is a helper function that allows us to attach signal handlers
@@ -175,6 +136,63 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         #Otherwise the object will deal with them itself.
         if self.window == object:
             self.handlers.append(hid)
+
+
+class ManagedDocument:
+    """This class represents a managed document inside of a Gedit tab.
+    Specifically, the document should be a python file. This class runs
+    Pylint on the given document.
+
+    This class is abstracted from the GeditPylint class, so that mulitple
+    tabs can be handled simultaneously.
+
+    An object of this class should be instantiated whenever a python
+    tab is added.
+    """
+    def __init__(self, window, document):
+        """This object needs to know about the Gedit window in order to
+        alter its task bar. Also this object needs to know what document is
+        supposed to be managed.
+        """
+        self.window = window
+        self.document = document
+
+        #Get a handle to the status bar and create context id for this plugin
+        self.status_bar = self.window.get_statusbar()
+        self.context_id = self.status_bar.get_context_id('pylint')
+
+        #This will hold the messages retrieved by pylint.
+        #They will be indexed by tag object. This allows for easy
+        #access and lookup in the cursor-moved signal hanlder.
+        self.lint_messages = dict()
+
+        #These are the default colors used for the different pylint message
+        #types
+        self.lint_color = dict()
+        self.lint_color['F'] = Gdk.RGBA(1.0, 0.0, 0.0, 0.25)
+        self.lint_color['E'] = Gdk.RGBA(1.0, 0.5, 0.5, 0.25)
+        self.lint_color['W'] = Gdk.RGBA(1.0, 1.0, 0.5, 0.25)
+        self.lint_color['R'] = Gdk.RGBA(0.5, 1.0, 0.5, 0.25)
+        self.lint_color['C'] = Gdk.RGBA(0.5, 0.5, 1.0, 0.25)
+
+        #This is a catch all for any code *other* than the one listed.
+        #It is mostly used to signal an error condition inside the
+        #plugin. No one should ever see this color.
+        self.lint_color['O'] = Gdk.RGBA(0, 0, 0, 0.5)
+
+        #Pango does not seem to understand that "words" in code don't
+        #necessarily end with a period or whitespace. Instead they can
+        #contain underscore's or hyphens, etc. This list is used to perform
+        #a simple test to see if the we have selected a whole word or not.
+        self.word_end_exceptions = ['-', '_']
+
+        #At this point we know this tab contains a python file.
+        #We need to run pylint when the document is saved,
+        #and showing the lint messages in the status bar.
+        document.connect('saved', self.run_pylint)
+        document.connect('cursor-moved', self.show_lint_message)
+
+        debug('Init!!')
 
     def run_pylint(self, document, error, data=None):
         """This method runs pylint. In general this method is called as a
@@ -336,6 +354,9 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
         It examines all the tags that apply to the cursor's position, looking
         for any that were applied by this plugin. If it finds one of our
         tags applies, it show the message in the status bar of Gedit.
+
+        Honestly, StatusBar is the worst implementation of a stack ever. Try
+        not to mess with this too much, it works.
         """
         cursor_pos = doc.get_property('cursor-position')
 
@@ -347,16 +368,20 @@ class GeditPylint(GObject.Object, Gedit.WindowActivatable):
                 #Get the text this tag was created to represent
                 msg = self.lint_messages[tag]['message']
 
+                #Remove any previous pylint message
+                self.status_bar.pop(self.context_id)
+
                 #Show the message in the status bar
                 self.status_bar.push(self.context_id, msg)
                 return False
 
         #If we get here then the cursor is not in a pylint tag. We need to
-        #now clear the status bar of our message.
-        self.status_bar.remove_all(self.context_id)
-        debug('Removed messages')
+        #now clear the status bar of our message. Should be harmless, if
+        #the status bar was not showing a pylint message.
+        self.status_bar.pop(self.context_id)
 
         return False
+
 
 def forward_to_char(start_iter, limit_iter):
     """Since python file's lines are usually indented, we need to move
@@ -375,6 +400,7 @@ def forward_to_char(start_iter, limit_iter):
     while (start_iter.get_char() in string.whitespace and
            start_iter.get_offset() < limit_iter.get_offset()):
         start_iter.forward_char()
+
 
 def debug(*msg):
     """This function prints out debug messages when ENABLE_DEBUG is True.
